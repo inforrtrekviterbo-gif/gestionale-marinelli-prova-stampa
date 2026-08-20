@@ -1,0 +1,23 @@
+{
+  "ApiBaseUrl": "https://gestionale-marinelli-stefano.stefano-mari-4575.chatgpt.site",
+  "Store": "Gran Sasso",
+  "DeviceToken": "INCOLLA_QUI_LA_CHIAVE_GENERATA_DAL_GESTIONALE",
+  "Adapter": "epson_fpmate",
+  "LocalWebSocketPort": 8080,
+  "EpsonFpMatePath": "C:\\Program Files (x86)\\EpsonFpMate\\EpsonFpMate.exe",
+  "EpsonSettingsPath": "C:\\ProgramData\\EPSON\\EpsonFpMate\\Settings.xml",
+  "WorkDirectory": "C:\\MarinelliRT\\Epson\\Input",
+  "EpsonOutputDirectory": "C:\\MarinelliRT\\Epson\\Output",
+  "EpsonPrinterNumber": 1,
+  "EpsonFiscalSerial": "POS",
+  "EpsonOperator": 1,
+  "EpsonDepartment": 1,
+  "EpsonPaymentIndexes": {
+    "cash": 1,
+    "card": 1,
+    "bank": 1,
+    "gift": 1
+  },
+  "LogPath": "C:\\ProgramData\\MarinelliRTBridge\\GranSasso\\bridge.log",
+  "ProcessingTimeoutSeconds": 45
+}

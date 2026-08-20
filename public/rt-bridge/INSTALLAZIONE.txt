@@ -1,0 +1,44 @@
+COLLEGAMENTO AUTOMATICO WINDOWS REGISTRATORI TELEMATICI — MARINELLI STEFANO
+
+Il collegamento viene installato una sola volta, parte automaticamente all'accesso di Windows e resta nascosto. L'operatore deve soltanto aprire il gestionale nel browser. Il sito non espone il registratore su Internet: il browser dialoga esclusivamente con ws://localhost:8080 e il ponte accetta soltanto l'origine del gestionale pubblicato.
+
+INSTALLAZIONE RAPIDA
+1. Nel gestionale aprire Amministrazione > Registratori RT e generare la chiave del negozio.
+2. Scaricare il pacchetto corretto, estrarre tutto lo ZIP e fare doppio clic su Installa-Viterbo.cmd oppure Installa-Gran-Sasso.cmd.
+3. Confermare la richiesta di Windows e incollare la chiave quando viene chiesta. L'installazione verifica subito che appartenga al negozio corretto e abilita automaticamente il ponte.
+4. Tornare nel gestionale e attendere lo stato "Collegato". Se la chiave è errata, l'installazione si interrompe senza avviare il ponte.
+5. Fare una stampa in modalità formazione insieme al tecnico fiscale. Se il collaudo non riesce, disabilitare il collegamento fino alla correzione.
+
+GRAN SASSO — EPSON FP-81 II RT
+1. Fare installare/configurare EpsonFpMate dal tecnico fiscale Epson.
+2. In EpsonFpMateConfig abilitare il file di output, scegliere formato XML, disattivare l'inserimento del timestamp e impostare il prefisso "Out". Impostare la cartella di output indicata nel config.json.
+3. Il programma di installazione verifica EpsonFpMate, protegge la chiave locale e configura l'avvio automatico. I documenti XML usano i comandi fiscali Epson ufficiali printRecItem, printRecSubtotal, printRecTotal, printRecRefund ed endFiscalReceipt.
+4. Il tecnico deve verificare numero stampante, reparto IVA, indici dei pagamenti e cartella di esito.
+
+VITERBO — RCH PRINT! 3.0 RT
+1. Collegamento diretto Wi-Fi/Ethernet configurato: IP 192.168.1.210, porta 23, Protocollo PC Standard.
+2. Il programma esegue un autotest locale del pacchetto Standard RCH e prova la porta TCP senza stampare. Se uno dei controlli fallisce, l'installazione si ferma.
+3. Il ponte invia ogni riga come vendita a reparto, applica gli sconti e, mantenendo attiva l'Opzione Fidelity, invia automaticamente il terminatore =c dopo il pagamento. Lo scontrino risulta stampato solo dopo ACK, checksum valido e risposta RCH di esecuzione OK.
+4. Il ponte non esegue piu polling delle vendite: riceve dal browser un ticket fiscale monouso e di breve durata, creato soltanto dopo il salvataggio riuscito su Firebase. Non rimette automaticamente in coda richieste con esito incerto.
+5. Impostazioni iniziali del pacchetto: reparto 1, contanti 1, carta 4, bonifico 8, buono 10. Il tecnico fiscale deve verificare che reparto e pagamenti del registratore abbiano queste associazioni e la corretta aliquota IVA.
+6. Verificare sul registratore: collegamento Ethernet, Protocollo PC Standard, stati aggiuntivi attivi, Opzione Fidelity attiva, indirizzo statico 192.168.1.210 e porta 23. Il ponte gestisce sia ACK attivo sia ACK disattivato e attende fino a 3 minuti in caso di sostituzione carta.
+7. Il primo scontrino deve essere eseguito in modalità formazione: un articolo semplice, importo minimo, prima contanti e poi carta. Confrontare descrizione, reparto, IVA, totale e forma di pagamento.
+
+TEST VELOCE VITERBO
+- Avviare Testa-Connessione-Viterbo.cmd sul PC cassa.
+- Il test apre e chiude soltanto la connessione TCP: non stampa e non modifica il registratore.
+- Esito atteso: "CONNESSIONE RCH RIUSCITA".
+
+SICUREZZA E FUNZIONAMENTO AUTOMATICO
+- Non inviare mai la chiave del ponte per e-mail o chat. Se viene esposta, rigenerarla dal gestionale.
+- La chiave del ponte resta nel file locale protetto e non viene mai consegnata al browser. Il ticket monouso non contiene dati fiscali ed e valido soltanto per il negozio autenticato.
+- L'installazione crea l'attivita Windows "Marinelli RT Bridge" con avvio nascosto all'accesso dell'utente cassa e riavvio automatico in caso di arresto.
+- Non avviare due ponti per lo stesso negozio.
+- In caso di errore la richiesta non viene ristampata automaticamente: verificare prima il registratore, poi usare "Rimetti in coda" dal gestionale.
+- Il registro per il tecnico si trova in C:\ProgramData\MarinelliRTBridge\NOME-NEGOZIO\bridge.log.
+
+NOTE FISCALI IMPORTANTI
+- Il reparto Epson e i reparti/pagamenti RCH devono essere associati alle corrette aliquote dal tecnico abilitato.
+- Resi e annulli fiscali richiedono i riferimenti del documento commerciale originale (numero Z, numero documento, data e matricola RT). Il ponte li blocca se tali dati non sono presenti, evitando documenti fiscali non validi.
+- Buoni, acconti, saldi prenotazione e resi restano bloccati nell'invio RCH ordinario finché non viene completata la relativa gestione fiscale dedicata prevista dal manuale.
+- Riferimenti ufficiali: EpsonFpMate Development Guide Rev. 29 e Manuale Protocollo PRINT! 3.0 RT, codice DE0095A0003, edizione 2026.

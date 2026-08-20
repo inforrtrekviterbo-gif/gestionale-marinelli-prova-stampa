@@ -1,0 +1,1 @@
+CREATE INDEX `reservation_items_reservation_idx` ON `reservation_items` (`reservation_id`);

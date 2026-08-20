@@ -1,0 +1,24 @@
+{
+  "ApiBaseUrl": "https://gestionale-marinelli-stefano.stefano-mari-4575.chatgpt.site",
+  "Store": "Viterbo",
+  "DeviceToken": "INCOLLA_QUI_LA_CHIAVE_GENERATA_DAL_GESTIONALE",
+  "Adapter": "rch_standard_tcp",
+  "LocalWebSocketPort": 8080,
+  "RchHost": "192.168.1.210",
+  "RchPort": 23,
+  "RchProtocol": "Standard",
+  "RchAddress": "01",
+  "RchDepartment": 1,
+  "RchFidelityEnabled": true,
+  "RchPaymentIndexes": {
+    "cash": 1,
+    "card": 4,
+    "bank": 8,
+    "gift": 10
+  },
+  "RchConnectTimeoutMilliseconds": 5000,
+  "RchResponseTimeoutSeconds": 180,
+  "RchFiscalProtocolValidated": true,
+  "FiscalJobsNotBeforeUtc": "IMPOSTATO_AUTOMATICAMENTE_DALL_INSTALLAZIONE",
+  "LogPath": "C:\\ProgramData\\MarinelliRTBridge\\Viterbo\\bridge.log"
+}

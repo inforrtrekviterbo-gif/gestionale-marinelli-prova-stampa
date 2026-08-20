@@ -1,0 +1,1 @@
+ALTER TABLE `reservation_items` ADD `discount_percent` real DEFAULT 0 NOT NULL;

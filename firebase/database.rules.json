@@ -1,0 +1,28 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "stores": {
+      "viterbo": {
+        ".read": "auth != null && auth.token.email != null && (auth.token.email == 'admin@gestionale.local' || auth.token.email == 'viterbo@gestionale.local')",
+        "sales": {
+          ".write": "auth != null && auth.token.email == 'admin@gestionale.local'",
+          "$saleId": {
+            ".write": "auth != null && auth.token.email != null && (auth.token.email == 'admin@gestionale.local' || auth.token.email == 'viterbo@gestionale.local') && newData.child('store').val() == 'Viterbo'",
+            ".validate": "newData.hasChildren(['id', 'receiptNo', 'store', 'total', 'createdAt', 'createdBy']) && newData.child('id').isNumber() && newData.child('receiptNo').isString() && newData.child('total').isNumber()"
+          }
+        }
+      },
+      "gran-sasso": {
+        ".read": "auth != null && auth.token.email != null && (auth.token.email == 'admin@gestionale.local' || auth.token.email == 'gran-sasso@gestionale.local')",
+        "sales": {
+          ".write": "auth != null && auth.token.email == 'admin@gestionale.local'",
+          "$saleId": {
+            ".write": "auth != null && auth.token.email != null && (auth.token.email == 'admin@gestionale.local' || auth.token.email == 'gran-sasso@gestionale.local') && newData.child('store').val() == 'Gran Sasso'",
+            ".validate": "newData.hasChildren(['id', 'receiptNo', 'store', 'total', 'createdAt', 'createdBy']) && newData.child('id').isNumber() && newData.child('receiptNo').isString() && newData.child('total').isNumber()"
+          }
+        }
+      }
+    }
+  }
+}
