@@ -92,16 +92,22 @@ function buildRchReceiptCommands(payload: LocalFiscalPayload | null | undefined)
   const amounts = lines.map((line) => eurosToRchCents(line.lineTotal));
   if (amounts.some((amount) => amount <= 0)) throw new Error("Gli importi dello scontrino RCH devono essere maggiori di zero.");
 
-  const commands = lines.map((line, index) => `=R${rchDepartment(line)}/$${amounts[index]}/(${rchDescription(line.description)})`);
+  // MODIFICA QUI: Inizializziamo con =K per resettare la cassa prima di battere i prodotti
+  const commands = [
+    "=K",
+    ...lines.map((line, index) => `=R${rchDepartment(line)}/$${amounts[index]}/(${rchDescription(line.description)})`)
+  ];
   commands.push("=S");
 
   const cash = eurosToRchCents((payload.payments ?? []).filter((entry) => entry.method === "cash").reduce((sum, entry) => sum + Number(entry.amount || 0), 0));
   const card = eurosToRchCents((payload.payments ?? []).filter((entry) => entry.method === "card").reduce((sum, entry) => sum + Number(entry.amount || 0), 0));
+  
   if (cash > 0 && card > 0) {
     commands.push(`=T1/$${cash}`, "=T4");
   } else {
     commands.push(card > 0 ? "=T4" : "=T1");
   }
+  
   return `${commands.join("\r\n")}\r\n`;
 }
 
