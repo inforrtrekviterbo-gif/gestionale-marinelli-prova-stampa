@@ -116,8 +116,8 @@ function buildRchReceiptCommands(payload: LocalFiscalPayload | null | undefined)
   const commands = ["=C1"];
   lines.forEach((line, index) => {
     const descPulita = rchDescription(line.description).replace(/[\(\)]/g, "").trim().substring(0, 20);
-    // Inseriamo /1/ dopo il prezzo in centesimi per indicare l'aliquota IVA standard alla cassa
-    commands.push(`=R22/$${amounts[index]}/1/${descPulita}`);
+    // Sostituiamo /1/ con /a/ prima della descrizione per mappare l'aliquota IVA standard 22% richiesta dal tracciato
+    commands.push(`=R22/$${amounts[index]}/a/${descPulita}`);
   });
   commands.push("=S", ...buildRchPaymentCommands(payload));
 
