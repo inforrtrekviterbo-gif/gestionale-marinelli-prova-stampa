@@ -79,6 +79,29 @@ function rchDescription(value: unknown) {
     .slice(0, 20) || "ARTICOLO";
 }
 
+function buildRchPaymentCommands(payload: LocalFiscalPayload) {
+  const paymentIndexes: Record<string, number> = { cash: 1, card: 4, bank: 8, gift: 10 };
+  const paymentOrder = ["gift", "cash", "bank", "card"];
+  const amounts = new Map<string, number>();
+
+  for (const payment of payload.payments ?? []) {
+    const amount = eurosToRchCents(payment.amount);
+    if (amount <= 0) continue;
+    if (!(payment.method in paymentIndexes)) throw new Error(`Pagamento RCH non configurato: ${payment.method}.`);
+    amounts.set(payment.method, (amounts.get(payment.method) ?? 0) + amount);
+  }
+
+  const expectedTotal = eurosToRchCents(payload.total);
+  const paymentTotal = [...amounts.values()].reduce((sum, amount) => sum + amount, 0);
+  if (paymentTotal !== expectedTotal) throw new Error("La somma dei pagamenti RCH non coincide con il totale dello scontrino.");
+
+  const activeMethods = paymentOrder.filter((method) => (amounts.get(method) ?? 0) > 0);
+  if (!activeMethods.length) throw new Error("Lo scontrino RCH non contiene un pagamento valido.");
+  if (activeMethods.length === 1) return [`=T${paymentIndexes[activeMethods[0]]}`];
+
+  return activeMethods.map((method) => `=T${paymentIndexes[method]}/$${amounts.get(method)}`);
+}
+
 function buildRchReceiptCommands(payload: LocalFiscalPayload | null | undefined) {
   if (!payload || !Array.isArray(payload.lines)) throw new Error("Dati fiscali RCH non disponibili.");
   const lines = payload.lines.filter((line) => Number(line.quantity) > 0 && line.itemType !== "return");
@@ -94,7 +117,7 @@ function buildRchReceiptCommands(payload: LocalFiscalPayload | null | undefined)
     "=C1",
     ...lines.map((line, index) => `=R22/$${amounts[index]}/${rchDescription(line.description)}`),
     "=S",
-    "=T1",
+    ...buildRchPaymentCommands(payload),
   ];
 
   return `${commands.join("\r\n")}\r\n`;
