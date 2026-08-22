@@ -113,12 +113,13 @@ function buildRchReceiptCommands(payload: LocalFiscalPayload | null | undefined)
   const amounts = lines.map((line) => eurosToRchCents(line.lineTotal));
   if (amounts.some((amount) => amount <= 0)) throw new Error("Gli importi dello scontrino RCH devono essere maggiori di zero.");
 
-  const commands = [
-    "=C1",
-    ...lines.map((line, index) => `=R22/$${amounts[index]}/${rchDescription(line.description)}`),
-    "=S",
-    ...buildRchPaymentCommands(payload),
-  ];
+  const commands = ["=C1"];
+  lines.forEach((line, index) => {
+    const descPulita = rchDescription(line.description).replace(/[\(\)]/g, "").trim().substring(0, 20);
+    // Inseriamo /1/ dopo il prezzo in centesimi per indicare l'aliquota IVA standard alla cassa
+    commands.push(`=R22/$${amounts[index]}/1/${descPulita}`);
+  });
+  commands.push("=S", ...buildRchPaymentCommands(payload));
 
   return `${commands.join("\r\n")}\r\n`;
 }
