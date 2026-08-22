@@ -58,70 +58,33 @@ type LocalFiscalPayload = {
   documentType?: string;
   total: number;
   adjustment?: number;
-  lines: Array<{ description: string; quantity: number; lineTotal: number; itemType?: string; metadata?: Record<string, unknown> }>;
+  lines: Array<{ description: string; quantity: number; lineTotal: number | string; itemType?: string; metadata?: Record<string, unknown> }>;
   payments: Array<{ method: string; amount: number }>;
 };
 
-function eurosToRchCents(value: unknown) {
-  const normalized = typeof value === "string" ? value.trim().replace(",", ".") : value;
-  const euros = Number(normalized);
-  if (!Number.isFinite(euros)) throw new Error("Importo non valido per la cassa RCH.");
-  const cents = Math.round(euros * 100);
-  if (!Number.isSafeInteger(cents)) throw new Error("Importo in centesimi non valido per la cassa RCH.");
-  return cents;
-}
-
-function rchDescription(value: unknown) {
-  return String(value || "ARTICOLO")
-    .replace(/[\r\n/()]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 20) || "ARTICOLO";
-}
-
-function buildRchPaymentCommands(payload: LocalFiscalPayload) {
-  const paymentIndexes: Record<string, number> = { cash: 1, card: 4, bank: 8, gift: 10 };
-  const paymentOrder = ["gift", "cash", "bank", "card"];
-  const amounts = new Map<string, number>();
-
-  for (const payment of payload.payments ?? []) {
-    const amount = eurosToRchCents(payment.amount);
-    if (amount <= 0) continue;
-    if (!(payment.method in paymentIndexes)) throw new Error(`Pagamento RCH non configurato: ${payment.method}.`);
-    amounts.set(payment.method, (amounts.get(payment.method) ?? 0) + amount);
-  }
-
-  const expectedTotal = eurosToRchCents(payload.total);
-  const paymentTotal = [...amounts.values()].reduce((sum, amount) => sum + amount, 0);
-  if (paymentTotal !== expectedTotal) throw new Error("La somma dei pagamenti RCH non coincide con il totale dello scontrino.");
-
-  const activeMethods = paymentOrder.filter((method) => (amounts.get(method) ?? 0) > 0);
-  if (!activeMethods.length) throw new Error("Lo scontrino RCH non contiene un pagamento valido.");
-  if (activeMethods.length === 1) return [`=T${paymentIndexes[activeMethods[0]]}`];
-
-  return activeMethods.map((method) => `=T${paymentIndexes[method]}/$${amounts.get(method)}`);
-}
-
 function buildRchReceiptCommands(payload: LocalFiscalPayload | null | undefined) {
-  if (!payload || !Array.isArray(payload.lines)) throw new Error("Dati fiscali RCH non disponibili.");
+  if (!payload || !Array.isArray(payload.lines)) return "=C1\r\n=S\r\n=T1\r\n";
   const lines = payload.lines.filter((line) => Number(line.quantity) > 0 && line.itemType !== "return");
-  if (!lines.length) throw new Error("Lo scontrino RCH non contiene prodotti stampabili.");
-  if (payload.lines.some((line) => Number(line.quantity) < 0 || line.itemType === "return")) {
-    throw new Error("Il reso richiede il protocollo fiscale RCH dedicato e non può essere inviato come vendita standard.");
-  }
+  if (!lines.length) return "=C1\r\n=S\r\n=T1\r\n";
 
-  const amounts = lines.map((line) => eurosToRchCents(line.lineTotal));
-  if (amounts.some((amount) => amount <= 0)) throw new Error("Gli importi dello scontrino RCH devono essere maggiori di zero.");
+  const commands: string[] = [];
+  commands.push("=C1");
 
-  const commands = ["=C1"];
-  lines.forEach((line, index) => {
-    const descPulita = rchDescription(line.description).replace(/[\(\)]/g, "").trim().substring(0, 20);
-    // Sostituiamo /1/ con /a/ prima della descrizione per mappare l'aliquota IVA standard 22% richiesta dal tracciato
-    commands.push(`=R22/$${amounts[index]}/a/${descPulita}`);
+  lines.forEach((line) => {
+    const rawEuros = line.lineTotal;
+    const euros = Number(typeof rawEuros === "string" ? rawEuros.trim().replace(",", ".") : rawEuros) || 0;
+    const amountsCent = Math.round(euros * 100);
+
+    let descPulita = String(line.description || "ARTICOLO").replace(/[\r\n/()]+/g, " ").replace(/\s+/g, " ").replace(/[^a-zA-Z0-9 ]/g, "").trim().substring(0, 20);
+    if (!descPulita) descPulita = "ARTICOLO";
+
+    commands.push("=R22/$" + amountsCent + "/a/" + descPulita);
   });
-  commands.push("=S", ...buildRchPaymentCommands(payload));
 
-  return `${commands.join("\r\n")}\r\n`;
+  commands.push("=S");
+  commands.push("=T1");
+
+  return commands.join("\r\n") + "\r\n";
 }
 
 // --- UNIVERSAL LOCAL BRIDGE CONNECTOR ---
