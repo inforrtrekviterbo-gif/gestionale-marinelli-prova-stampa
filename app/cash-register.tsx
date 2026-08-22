@@ -72,53 +72,44 @@ function eurosToRchCents(value: unknown) {
 }
 
 function rchDescription(value: unknown) {
-  return String(value || "ARTICOLO").replace(/[\r\n/()]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 40) || "ARTICOLO";
-}
-
-function rchDepartment(line: LocalFiscalPayload["lines"][number]) {
-  const metadata = line.metadata ?? {};
-  const requested = Number(metadata.department ?? metadata.departmentNumber ?? metadata.numeroReparto ?? 1);
-  return Number.isInteger(requested) && requested >= 1 && requested <= 99 ? requested : 1;
+  return String(value || "ARTICOLO")
+    .replace(/[\r\n/()]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 20) || "ARTICOLO";
 }
 
 function buildRchReceiptCommands(payload: LocalFiscalPayload | null | undefined) {
   if (!payload || !Array.isArray(payload.lines)) throw new Error("Dati fiscali RCH non disponibili.");
   const lines = payload.lines.filter((line) => Number(line.quantity) > 0 && line.itemType !== "return");
   if (!lines.length) throw new Error("Lo scontrino RCH non contiene prodotti stampabili.");
-  if ((payload.lines ?? []).some((line) => Number(line.quantity) < 0 || line.itemType === "return")) {
+  if (payload.lines.some((line) => Number(line.quantity) < 0 || line.itemType === "return")) {
     throw new Error("Il reso richiede il protocollo fiscale RCH dedicato e non può essere inviato come vendita standard.");
   }
 
   const amounts = lines.map((line) => eurosToRchCents(line.lineTotal));
   if (amounts.some((amount) => amount <= 0)) throw new Error("Gli importi dello scontrino RCH devono essere maggiori di zero.");
 
-  // MODIFICA QUI: Inizializziamo con =K per resettare la cassa prima di battere i prodotti
   const commands = [
-    "=K",
-    ...lines.map((line, index) => `=R${rchDepartment(line)}/$${amounts[index]}/(${rchDescription(line.description)})`)
+    "=C1",
+    ...lines.map((line, index) => `=R22/$${amounts[index]}/${rchDescription(line.description)}`),
+    "=S",
+    "=T1",
   ];
-  commands.push("=S");
 
-  const cash = eurosToRchCents((payload.payments ?? []).filter((entry) => entry.method === "cash").reduce((sum, entry) => sum + Number(entry.amount || 0), 0));
-  const card = eurosToRchCents((payload.payments ?? []).filter((entry) => entry.method === "card").reduce((sum, entry) => sum + Number(entry.amount || 0), 0));
-  
-  if (cash > 0 && card > 0) {
-    commands.push(`=T1/$${cash}`, "=T4");
-  } else {
-    commands.push(card > 0 ? "=T4" : "=T1");
-  }
-  
   return `${commands.join("\r\n")}\r\n`;
 }
 
-function localFiscalBridgeRequest(message: Record<string, unknown> | string, responseTimeout = 120000) {
+// --- UNIVERSAL LOCAL BRIDGE CONNECTOR ---
+function localFiscalBridgeRequest(message: Record<string, unknown> | string, responseTimeout = 200000) {
   return new Promise<Record<string, unknown>>((resolve, reject) => {
-    const isPrint = typeof message === "string" || message.action === "printFiscalReceipt";
+    const isPrint = typeof message === "object" && message !== null && message.action === "printFiscalReceipt";
     if (isPrint) localFiscalPrintActive = true;
     let settled = false;
-    const socket = new WebSocket("ws://localhost:8080/");
-    const openTimer = window.setTimeout(() => finish(new Error("Collegamento locale al registratore non disponibile.")), 6000);
+    const socket = new WebSocket("ws://localhost:8080/", "marinelli-rt");
+    const openTimer = window.setTimeout(() => finish(new Error("Collegamento locale al registratore non disponibile. Verificare l'Agent locale.")), 6000);
     const responseTimer = window.setTimeout(() => finish(new Error("Il registratore non ha concluso la stampa entro il tempo previsto.")), responseTimeout);
+
     function finish(result: Record<string, unknown> | Error) {
       if (settled) return;
       settled = true;
@@ -128,21 +119,27 @@ function localFiscalBridgeRequest(message: Record<string, unknown> | string, res
       if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) socket.close();
       if (result instanceof Error) reject(result); else resolve(result);
     }
+
     socket.addEventListener("open", () => {
       window.clearTimeout(openTimer);
       socket.send(typeof message === "string" ? message : JSON.stringify(message));
     });
+
     socket.addEventListener("message", (event) => {
       void (async () => {
         const raw = event.data instanceof Blob ? await event.data.text() : event.data instanceof ArrayBuffer ? new TextDecoder().decode(event.data) : String(event.data);
         if (raw.includes("\x15") || /\bNACK\b/i.test(raw)) {
-          finish(Object.assign(new Error("Errore Cassa RCH"), { code: "RCH_NACK" }));
+          finish(Object.assign(new Error("Errore Cassa RCH/EPSON"), { code: "RT_NACK" }));
           return;
         }
         try {
           const result = JSON.parse(raw) as Record<string, unknown>;
           if (result.ok === true) finish(result);
-          else finish(Object.assign(new Error(result.code === "RCH_NACK" ? "Errore Cassa RCH" : String(result.error || "Errore registratore fiscale.")), { code: String(result.code || "") }));
+          else {
+            const code = String(result.code || "");
+            const message = ["RT_NACK", "RCH_NACK"].includes(code) ? "Errore Cassa RCH" : String(result.error || "Errore registratore fiscale.");
+            finish(Object.assign(new Error(message), { code }));
+          }
         } catch {
           if (/\b(?:ERRORE|ERROR|FAIL|KO)\b/i.test(raw)) finish(new Error(raw.trim() || "Errore registratore fiscale."));
           else if (raw.includes("\x06") || /\b(?:ACK|OK|SUCCESS)\b/i.test(raw)) finish({ ok: true, response: raw });
@@ -150,11 +147,25 @@ function localFiscalBridgeRequest(message: Record<string, unknown> | string, res
         }
       })();
     });
+
     socket.addEventListener("error", () => finish(new Error("Collegamento locale al registratore non disponibile.")));
     socket.addEventListener("close", () => {
       if (!settled) finish(new Error("Il collegamento locale al registratore si è interrotto."));
     });
   });
+}
+
+async function confirmPhysicalRchPrint(jobId: number, bridgeResult: Record<string, unknown>) {
+  if (bridgeResult.requiresPhysicalConfirmation !== true) return;
+  const printed = window.confirm("La RCH ha stampato e fatto avanzare lo scontrino completo? Conferma soltanto dopo averlo verificato fisicamente.");
+  if (!printed) {
+    throw Object.assign(new Error("Comandi inviati alla RCH, ma stampa fisica non confermata. Verifica il display e NON ristampare senza controllo."), { code: "PHYSICAL_PRINT_NOT_CONFIRMED" });
+  }
+  try {
+    await post("completeLocalFiscalJob", { jobId, response: "Stampa RCH verificata fisicamente dall'operatore." });
+  } catch {
+    throw Object.assign(new Error("Stampa RCH confermata, ma aggiornamento del gestionale non riuscito. NON RISTAMPARE."), { code: "CONFIRMATION_PENDING" });
+  }
 }
 
 function makeEan13() {
@@ -431,7 +442,9 @@ export default function CashRegister({ data, reload }: { data: CashData; reload:
   const createsResidualGift = hasGiftOriginReturn && total < -0.001;
   const customerMatches = useMemo(() => { const query = customerQuery.trim().toLocaleLowerCase("it"); return query ? data.customers.filter((item) => `${customerLabel(item)} ${item.vatNumber}`.toLocaleLowerCase("it").includes(query)).slice(0, 8) : []; }, [data.customers, customerQuery]);
   const fiscalDevice = data.fiscalDevices.find((device) => device.store === store);
-  const fiscalOnline = Boolean(fiscalDevice?.enabled && fiscalDevice.lastSeenAt && new Date(data.generatedAt).getTime() - new Date(fiscalDevice.lastSeenAt).getTime() < 15000);
+  const fiscalRecent = Boolean(fiscalDevice?.enabled && fiscalDevice.lastSeenAt && new Date(data.generatedAt).getTime() - new Date(fiscalDevice.lastSeenAt).getTime() < 15000);
+  const fiscalOnline = Boolean(fiscalRecent && fiscalDevice?.lastStatus === "online");
+  const fiscalNetworkReady = Boolean(fiscalRecent && fiscalDevice?.lastStatus === "network_ready");
   const lastFiscalJob = lastSale ? data.fiscalJobs.find((job) => job.saleId === lastSale.id) ?? (lastSale.fiscalJob ? { ...lastSale.fiscalJob, saleId: lastSale.id, store, attempts: 0, deviceResponse: null, receiptNo: lastSale.receiptNo } : null) : null;
 
   useEffect(() => {
@@ -508,16 +521,15 @@ export default function CashRegister({ data, reload }: { data: CashData; reload:
       let fiscalMessage = result.fiscalJob?.status === "awaiting_setup" ? "Registratore RT da configurare: la richiesta resta salvata." : "";
       if (result.realtimeSynced && result.localFiscalTicket && result.fiscalJob?.id) {
         try {
-          const bridgeMessage = store === "Viterbo"
-            ? buildRchReceiptCommands(result.localFiscalPayload as LocalFiscalPayload)
-            : { action: "printFiscalReceipt", store, ticket: result.localFiscalTicket };
-          await localFiscalBridgeRequest(bridgeMessage);
-          if (store === "Viterbo") {
-            try { await post("completeLocalFiscalJob", { jobId: result.fiscalJob.id, response: "Comandi RCH confermati dal ponte WebSocket locale." }); }
-            catch { throw Object.assign(new Error("Scontrino inviato alla RCH, ma conferma al gestionale non riuscita. NON RISTAMPARE."), { code: "CONFIRMATION_PENDING" }); }
-          }
+          const bridgeResult = await localFiscalBridgeRequest({
+            action: "printFiscalReceipt",
+            store,
+            ticket: result.localFiscalTicket,
+            ...(store === "Viterbo" ? { rchCommands: buildRchReceiptCommands(result.localFiscalPayload as LocalFiscalPayload) } : {}),
+          });
+          if (store === "Viterbo") await confirmPhysicalRchPrint(result.fiscalJob.id, bridgeResult);
           result.fiscalJob.status = "printed";
-          fiscalMessage = "Scontrino RT stampato.";
+          fiscalMessage = typeof bridgeResult.warning === "string" ? bridgeResult.warning : "Scontrino RT stampato.";
         } catch (reason) {
           fiscalError = reason instanceof Error ? reason.message : "Errore registratore fiscale.";
           result.fiscalJob.status = "error";
@@ -545,15 +557,14 @@ export default function CashRegister({ data, reload }: { data: CashData; reload:
     try {
       const result = await post("retryFiscalJob", { jobId: lastFiscalJob.id });
       const retryStore = (result.store ?? store) as Store;
-      const bridgeMessage = retryStore === "Viterbo"
-        ? buildRchReceiptCommands(result.localFiscalPayload as LocalFiscalPayload)
-        : { action: "printFiscalReceipt", store: retryStore, ticket: result.localFiscalTicket };
-      await localFiscalBridgeRequest(bridgeMessage);
-      if (retryStore === "Viterbo") {
-        try { await post("completeLocalFiscalJob", { jobId: lastFiscalJob.id, response: "Comandi RCH confermati dal ponte WebSocket locale." }); }
-        catch { throw Object.assign(new Error("Scontrino inviato alla RCH, ma conferma al gestionale non riuscita. NON RISTAMPARE."), { code: "CONFIRMATION_PENDING" }); }
-      }
-      setNotice("Scontrino RT stampato.");
+      const bridgeResult = await localFiscalBridgeRequest({
+        action: "printFiscalReceipt",
+        store: retryStore,
+        ticket: result.localFiscalTicket,
+        ...(retryStore === "Viterbo" ? { rchCommands: buildRchReceiptCommands(result.localFiscalPayload as LocalFiscalPayload) } : {}),
+      });
+      if (retryStore === "Viterbo") await confirmPhysicalRchPrint(lastFiscalJob.id, bridgeResult);
+      setNotice(typeof bridgeResult.warning === "string" ? bridgeResult.warning : "Scontrino RT stampato.");
       await reload();
     }
     catch (reason) {
@@ -568,7 +579,7 @@ export default function CashRegister({ data, reload }: { data: CashData; reload:
 
   return (
     <section className="screen">
-      <div className="screen-head"><div><p className="eyebrow">POSTAZIONE OPERATIVA</p><h1>Cassa {store}</h1><span className={`cash-fiscal-status ${fiscalOnline ? "ready" : fiscalDevice?.lastStatus === "error" ? "failed" : "waiting"}`}><i />{fiscalOnline ? `${fiscalDevice?.vendor} ${fiscalDevice?.model} collegato` : fiscalDevice?.enabled ? `Registratore non raggiungibile · ${fiscalDevice.vendor} ${fiscalDevice.model}` : `Registratore RT non abilitato · ${fiscalDevice?.vendor ?? ""} ${fiscalDevice?.model ?? ""}`}</span></div>{data.user.role === "admin" && <label className="field inline"><span>Negozio</span><select value={adminStore} onChange={(event) => setAdminStore(event.target.value as Store)}><option>Viterbo</option><option>Gran Sasso</option></select></label>}</div>
+      <div className="screen-head"><div><p className="eyebrow">POSTAZIONE OPERATIVA</p><h1>Cassa {store}</h1><span className={`cash-fiscal-status ${fiscalOnline || fiscalNetworkReady ? "ready" : fiscalDevice?.lastStatus === "error" ? "failed" : "waiting"}`}><i />{fiscalOnline ? `${fiscalDevice?.vendor} ${fiscalDevice?.model} collegato` : fiscalNetworkReady ? `Rete ${fiscalDevice?.vendor} verificata · ${fiscalDevice?.model}` : fiscalDevice?.lastStatus === "error" ? `Errore collegamento locale · ${fiscalDevice.vendor} ${fiscalDevice.model}` : fiscalDevice?.enabled ? `Registratore non raggiungibile · ${fiscalDevice.vendor} ${fiscalDevice.model}` : `Registratore RT non abilitato · ${fiscalDevice?.vendor ?? ""} ${fiscalDevice?.model ?? ""}`}</span></div>{data.user.role === "admin" && <label className="field inline"><span>Negozio</span><select value={adminStore} onChange={(event) => setAdminStore(event.target.value as Store)}><option>Viterbo</option><option>Gran Sasso</option></select></label>}</div>
       {notice && <div className="alert success">{notice}</div>}
       {error && <div className="alert danger visual-alert">⚠ {error}</div>}
       <div className="cash-grid">
