@@ -130,7 +130,7 @@ function localFiscalBridgeRequest(message: Record<string, unknown> | string, res
     const isPrint = typeof message === "object" && message !== null && message.action === "printFiscalReceipt";
     if (isPrint) localFiscalPrintActive = true;
     let settled = false;
-    const socket = new WebSocket("ws://localhost:8080/", "marinelli-rt");
+    const socket = new WebSocket("ws://localhost:8085/", "marinelli-rt");
     const openTimer = window.setTimeout(() => finish(new Error("Collegamento locale al registratore non disponibile. Verificare l'Agent locale.")), 6000);
     const responseTimer = window.setTimeout(() => finish(new Error("Il registratore non ha concluso la stampa entro il tempo previsto.")), responseTimeout);
 
