@@ -94,6 +94,21 @@ function buildRchPaymentCommands(payload: LocalFiscalPayload) {
   return activeMethods.map((method) => `=T${paymentIndexes[method]}/$${amounts.get(method)}`);
 }
 
+// Deve produrre esattamente lo stesso testo di ConvertTo-RchDescription nel ponte
+// Windows (MarinelliRTBridge.ps1): il ponte ricalcola i comandi attesi e rifiuta
+// lo scontrino se non coincidono carattere per carattere con quelli inviati qui.
+function cleanRchDescription(value: string, maximum = 20) {
+  const base = String(value ?? "");
+  if (!base.trim()) return "ARTICOLO";
+  const stripped = base.normalize("NFD").replace(/\p{Diacritic}/gu, "").normalize("NFC");
+  let clean = stripped.replace(/[^\x20-\x7E]/g, " ");
+  clean = clean.replace(/[/()$*[\]^_@]/g, " ");
+  clean = clean.replace(/\s+/g, " ").trim();
+  if (!clean) clean = "ARTICOLO";
+  if (clean.length > maximum) clean = clean.substring(0, maximum).trim();
+  return clean;
+}
+
 function buildRchReceiptCommands(payload: LocalFiscalPayload | null | undefined) {
   if (!payload || !Array.isArray(payload.lines)) return "=C1\r\n=S\r\n=T1\r\n";
   const lines = payload.lines.filter((line) => Number(line.quantity) > 0 && line.itemType !== "return");
@@ -107,8 +122,7 @@ function buildRchReceiptCommands(payload: LocalFiscalPayload | null | undefined)
     const euros = Number(typeof rawEuros === "string" ? rawEuros.trim().replace(",", ".") : rawEuros) || 0;
     const amountsCent = Math.round(euros * 100);
 
-    let descPulita = String(line.description || "ARTICOLO").replace(/[\r\n/()]+/g, " ").replace(/\s+/g, " ").replace(/[^a-zA-Z0-9 ]/g, "").trim().substring(0, 20);
-    if (!descPulita) descPulita = "ARTICOLO";
+    const descPulita = cleanRchDescription(line.description || "ARTICOLO", 20);
 
     commands.push("=R22/$" + amountsCent + "/a/" + descPulita);
   });
