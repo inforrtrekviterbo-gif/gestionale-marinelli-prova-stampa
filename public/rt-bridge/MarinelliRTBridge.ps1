@@ -563,9 +563,18 @@ function Receive-LocalWebSocketJson {
       if ($result.Count -gt 0) { $memory.Write($buffer, 0, $result.Count) }
       if ($memory.Length -gt 65536) { throw "Richiesta locale troppo grande." }
     } while (-not $result.EndOfMessage)
-    $json = [Text.Encoding]::UTF8.GetString($memory.ToArray())
+    [byte[]]$raw = $memory.ToArray()
+    $json = [Text.Encoding]::UTF8.GetString($raw)
     if ([string]::IsNullOrWhiteSpace($json)) { throw "Richiesta locale vuota." }
-    return ($json | ConvertFrom-Json)
+    # Alcuni client premettono BOM o caratteri di controllo: il parser JSON li rifiuta.
+    $json = $json.Trim([char[]]@([char]0xFEFF, [char]0x200B, [char]0x0000, ' ', "`t", "`r", "`n"))
+    try {
+      return ($json | ConvertFrom-Json)
+    } catch {
+      $preview = [BitConverter]::ToString($raw, 0, [Math]::Min(96, $raw.Length))
+      Write-BridgeLog "Payload locale non JSON ($($raw.Length) byte). Primi byte: $preview" "WARN"
+      throw
+    }
   } finally {
     $memory.Dispose()
   }
@@ -651,7 +660,7 @@ function Start-LocalWebSocketBridge {
           $context.Response.Close()
           continue
         }
-        $webSocketContext = $context.AcceptWebSocketAsync($null).GetAwaiter().GetResult()
+        $webSocketContext = $context.AcceptWebSocketAsync([NullString]::Value).GetAwaiter().GetResult()
         $socket = $webSocketContext.WebSocket
         $request = Receive-LocalWebSocketJson -Socket $socket
         if (-not $request) { continue }
