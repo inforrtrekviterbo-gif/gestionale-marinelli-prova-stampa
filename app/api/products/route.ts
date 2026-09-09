@@ -19,6 +19,8 @@ type VariantInput = {
   eans: string[];
   viterboQty: number;
   granSassoQty: number;
+  viterboReorderLevel: number;
+  granSassoReorderLevel: number;
 };
 
 const allowedImageTypes = new Map([
@@ -41,6 +43,11 @@ function quantity(value: unknown) {
   return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : 0;
 }
 
+function reorderLevel(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, Math.min(9999, Math.round(parsed))) : 2;
+}
+
 function slug(value: string) {
   return value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "colore";
 }
@@ -56,6 +63,8 @@ function parseVariants(value: unknown): VariantInput[] {
       eans: Array.isArray(item.eans) ? item.eans.map(text).filter(Boolean) : [],
       viterboQty: quantity(item.viterboQty),
       granSassoQty: quantity(item.granSassoQty),
+      viterboReorderLevel: reorderLevel(item.viterboReorderLevel),
+      granSassoReorderLevel: reorderLevel(item.granSassoReorderLevel),
     };
   });
 }
@@ -151,8 +160,8 @@ export async function POST(request: Request) {
       if (!productId) throw new Error("Variante non creata.");
       createdIds.push(productId);
       for (const ean of variant.eans) await database().prepare(`INSERT INTO product_eans (product_id, ean) VALUES (?, ?)`).bind(productId, ean).run();
-      await database().prepare(`INSERT INTO inventory (product_id, store, quantity, reserved) VALUES (?, 'Viterbo', ?, 0)`).bind(productId, viterboQty).run();
-      await database().prepare(`INSERT INTO inventory (product_id, store, quantity, reserved) VALUES (?, 'Gran Sasso', ?, 0)`).bind(productId, granSassoQty).run();
+      await database().prepare(`INSERT INTO inventory (product_id, store, quantity, reserved, reorder_level) VALUES (?, 'Viterbo', ?, 0, ?)`).bind(productId, viterboQty, variant.viterboReorderLevel).run();
+      await database().prepare(`INSERT INTO inventory (product_id, store, quantity, reserved, reorder_level) VALUES (?, 'Gran Sasso', ?, 0, ?)`).bind(productId, granSassoQty, variant.granSassoReorderLevel).run();
     }
   } catch (error) {
     for (const productId of createdIds) {

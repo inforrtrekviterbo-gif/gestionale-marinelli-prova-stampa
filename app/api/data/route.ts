@@ -33,6 +33,8 @@ type ProductRow = Record<string, unknown> & {
   viterboReserved: number;
   granSassoQty: number;
   granSassoReserved: number;
+  viterboReorderLevel: number;
+  granSassoReorderLevel: number;
 };
 
 type CustomerRow = Record<string, unknown> & { createdStore: string };
@@ -173,7 +175,9 @@ async function productRows() {
     COALESCE(MAX(CASE WHEN i.store = 'Viterbo' THEN i.quantity END), 0) AS viterboQty,
     COALESCE(MAX(CASE WHEN i.store = 'Viterbo' THEN i.reserved END), 0) AS viterboReserved,
     COALESCE(MAX(CASE WHEN i.store = 'Gran Sasso' THEN i.quantity END), 0) AS granSassoQty,
-    COALESCE(MAX(CASE WHEN i.store = 'Gran Sasso' THEN i.reserved END), 0) AS granSassoReserved
+    COALESCE(MAX(CASE WHEN i.store = 'Gran Sasso' THEN i.reserved END), 0) AS granSassoReserved,
+    COALESCE(MAX(CASE WHEN i.store = 'Viterbo' THEN i.reorder_level END), 2) AS viterboReorderLevel,
+    COALESCE(MAX(CASE WHEN i.store = 'Gran Sasso' THEN i.reorder_level END), 2) AS granSassoReorderLevel
     FROM products p
     LEFT JOIN product_eans pe ON pe.product_id = p.id
     LEFT JOIN inventory i ON i.product_id = p.id
@@ -370,6 +374,8 @@ async function updateProduct(user: SessionUser, body: JsonMap) {
   for (const ean of eans) if (await database().prepare(`SELECT id FROM product_eans WHERE ean = ? AND product_id <> ?`).bind(ean, productId).first()) return json({ error: `EAN già presente: ${ean}.` }, 409);
   const viterboQty = Math.max(0, Math.round(numberValue(body.viterboQty)));
   const granSassoQty = Math.max(0, Math.round(numberValue(body.granSassoQty)));
+  const viterboReorderLevel = Math.max(0, Math.min(9999, Math.round(numberValue(body.viterboReorderLevel, 2))));
+  const granSassoReorderLevel = Math.max(0, Math.min(9999, Math.round(numberValue(body.granSassoReorderLevel, 2))));
   const stock = await all<{ store: Store; reserved: number }>(`SELECT store, reserved FROM inventory WHERE product_id = ?`, productId);
   const viterboReserved = Number(stock.find((row) => row.store === "Viterbo")?.reserved ?? 0);
   const granSassoReserved = Number(stock.find((row) => row.store === "Gran Sasso")?.reserved ?? 0);
@@ -381,8 +387,8 @@ async function updateProduct(user: SessionUser, body: JsonMap) {
     db.prepare(`UPDATE products SET sku = ?, color = ?, size = ? WHERE id = ?`).bind(sku, color, size, productId),
     db.prepare(`DELETE FROM product_eans WHERE product_id = ?`).bind(productId),
     ...eans.map((ean) => db.prepare(`INSERT INTO product_eans (product_id, ean) VALUES (?, ?)`).bind(productId, ean)),
-    db.prepare(`UPDATE inventory SET quantity = ? WHERE product_id = ? AND store = 'Viterbo'`).bind(viterboQty, productId),
-    db.prepare(`UPDATE inventory SET quantity = ? WHERE product_id = ? AND store = 'Gran Sasso'`).bind(granSassoQty, productId),
+    db.prepare(`UPDATE inventory SET quantity = ?, reorder_level = ? WHERE product_id = ? AND store = 'Viterbo'`).bind(viterboQty, viterboReorderLevel, productId),
+    db.prepare(`UPDATE inventory SET quantity = ?, reorder_level = ? WHERE product_id = ? AND store = 'Gran Sasso'`).bind(granSassoQty, granSassoReorderLevel, productId),
   ];
   await db.batch(statements);
   return json({ ok: true });

@@ -1,0 +1,205 @@
+[
+  {
+    "name": "Accesso anonimo bloccato",
+    "status": "PASS"
+  },
+  {
+    "name": "Token Firebase errato respinto",
+    "status": "PASS"
+  },
+  {
+    "name": "Vendita contanti e scarico magazzino",
+    "status": "PASS"
+  },
+  {
+    "name": "Vendita carta e pagamento misto",
+    "status": "PASS"
+  },
+  {
+    "name": "Pagamento incoerente respinto",
+    "status": "PASS"
+  },
+  {
+    "name": "Giacenza insufficiente respinta",
+    "status": "PASS"
+  },
+  {
+    "name": "Negozio non può vendere per altro negozio",
+    "status": "PASS"
+  },
+  {
+    "name": "Operazioni amministrative protette",
+    "status": "PASS"
+  },
+  {
+    "name": "Bonifico riservato amministratore",
+    "status": "PASS"
+  },
+  {
+    "name": "Clienti separati e dettaglio protetto",
+    "status": "PASS"
+  },
+  {
+    "name": "Creazione prodotto e richiamo EAN",
+    "status": "PASS"
+  },
+  {
+    "name": "Carico rapido EAN",
+    "status": "PASS"
+  },
+  {
+    "name": "Trasferimento scarica origine e carica destinazione",
+    "status": "PASS"
+  },
+  {
+    "name": "Buono emissione e consumo",
+    "status": "PASS"
+  },
+  {
+    "name": "Prenotazione e saldo corretti",
+    "status": "PASS"
+  },
+  {
+    "name": "Reso originale e doppio reso respinto",
+    "status": "PASS"
+  },
+  {
+    "name": "Preventivo calcoli e PDF",
+    "status": "PASS"
+  },
+  {
+    "name": "Accesso PDF altro negozio negato",
+    "status": "PASS"
+  },
+  {
+    "name": "Guasto Firebase conserva vendita e coda",
+    "status": "PASS"
+  },
+  {
+    "name": "Ticket stampa usabile una volta",
+    "status": "PASS"
+  },
+  {
+    "name": "Righe duplicate non superano disponibilità",
+    "status": "FAIL",
+    "detail": "Ricevuto 200, giacenza finale -2\n\n200 !== 409\n"
+  },
+  {
+    "name": "Due vendite simultanee non superano disponibilità",
+    "status": "FAIL",
+    "detail": "Risposte 200,200, giacenza finale -2"
+  },
+  {
+    "name": "Ripetizione richiesta non duplica vendita",
+    "status": "FAIL",
+    "detail": "Stessa richiesta registra 2 vendite\n\n2 !== 1\n"
+  },
+  {
+    "name": "Guasto DB non lascia vendita parziale",
+    "status": "FAIL",
+    "detail": "Vendita presente senza righe; Injected database failure\n\n1 !== 0\n"
+  },
+  {
+    "name": "Quantità prodotto negativa respinta",
+    "status": "FAIL",
+    "detail": "Accettata vendita negativa; giacenza 7"
+  },
+  {
+    "name": "Saldo prenotazione non alterabile",
+    "status": "FAIL",
+    "detail": "Prenotazione chiusa pagando zero invece di 7; giacenza 5"
+  },
+  {
+    "name": "Storico conserva tutte le vendite per i report",
+    "status": "FAIL",
+    "detail": "DB 301 vendite; dashboard riceve 300\n\n300 !== 301\n"
+  },
+  {
+    "name": "PDF lungo include ultime righe e totale",
+    "status": "FAIL",
+    "detail": "Totale assente: taglio dopo 42 righe"
+  },
+  {
+    "name": "Scontrino cortesia nasconde importi",
+    "status": "FAIL",
+    "detail": "PDF cortesia contiene totale e importi"
+  },
+  {
+    "name": "Destinatario vede trasferimento in arrivo",
+    "status": "FAIL",
+    "detail": "Trasferimento entrante assente\n\n0 !== 1\n"
+  },
+  {
+    "name": "Errore EAN duplicato gestito senza record parziali",
+    "status": "FAIL",
+    "detail": "Prodotto parziale presente; {\"status\":\"exception\",\"error\":\"UNIQUE constraint failed: product_eans.ean\"}\n\n1 !== 0\n"
+  },
+  {
+    "name": "Modifica e disattivazione cliente",
+    "status": "PASS"
+  },
+  {
+    "name": "Modifica prodotto e disattivazione preservano storico",
+    "status": "PASS"
+  },
+  {
+    "name": "Modifica e annullamento trasferimento ripristinano stock",
+    "status": "PASS"
+  },
+  {
+    "name": "Annullamento prenotazione libera riserva",
+    "status": "PASS"
+  },
+  {
+    "name": "Modifica e cancellazione buono",
+    "status": "PASS"
+  },
+  {
+    "name": "Risuolatura con acconto e saldo",
+    "status": "PASS"
+  },
+  {
+    "name": "Fattura automatica con bonifico",
+    "status": "PASS"
+  },
+  {
+    "name": "Prodotto multiplo con varianti",
+    "status": "PASS"
+  },
+  {
+    "name": "Caricamento foto non valido respinto",
+    "status": "PASS"
+  },
+  {
+    "name": "Logout invalida sessione",
+    "status": "PASS"
+  },
+  {
+    "name": "Azzeramento con conferma errata respinto",
+    "status": "PASS"
+  },
+  {
+    "name": "Azzeramento isolato conserva utenti e registratori",
+    "status": "PASS"
+  },
+  {
+    "name": "Cliente altro negozio non associabile per ID",
+    "status": "FAIL",
+    "detail": "Vendita accetta cliente di altro negozio non visibile nella ricerca"
+  },
+  {
+    "name": "Buono non spendibile due volte in parallelo",
+    "status": "FAIL",
+    "detail": "Risposte 200,200; saldo buono -10"
+  },
+  {
+    "name": "Trasferimento con righe duplicate non supera stock",
+    "status": "FAIL",
+    "detail": "Trasferimento accettato; giacenza -2\n\n200 !== 409\n"
+  },
+  {
+    "name": "Recupero Firebase riattiva stampa in errore",
+    "status": "FAIL",
+    "detail": "Sincronizzazione recuperata ma stampa resta in errore; serve intervento manuale\n\n'error' !== 'queued'\n"
+  }
+]

@@ -80,6 +80,7 @@ export const inventory = sqliteTable("inventory", {
   store: text("store").notNull(),
   quantity: integer("quantity").notNull().default(0),
   reserved: integer("reserved").notNull().default(0),
+  reorderLevel: integer("reorder_level").notNull().default(2),
 }, (table) => [uniqueIndex("inventory_product_store_idx").on(table.productId, table.store)]);
 
 export const sales = sqliteTable("sales", {

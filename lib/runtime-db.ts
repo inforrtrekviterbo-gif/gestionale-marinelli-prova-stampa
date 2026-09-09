@@ -41,7 +41,7 @@ const schemaStatements = [
   `CREATE TABLE IF NOT EXISTS catalog_products (id TEXT PRIMARY KEY, name TEXT NOT NULL, brand TEXT NOT NULL DEFAULT '', category TEXT, base_price REAL NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT, sku TEXT NOT NULL UNIQUE, name TEXT NOT NULL, brand TEXT NOT NULL DEFAULT '', category TEXT, color TEXT, size TEXT, price REAL NOT NULL, variant_group TEXT, photo_key TEXT, active INTEGER NOT NULL DEFAULT 1)`,
   `CREATE TABLE IF NOT EXISTS product_eans (id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE, ean TEXT NOT NULL UNIQUE)`,
-  `CREATE TABLE IF NOT EXISTS inventory (id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE, store TEXT NOT NULL, quantity INTEGER NOT NULL DEFAULT 0, reserved INTEGER NOT NULL DEFAULT 0, UNIQUE(product_id, store))`,
+  `CREATE TABLE IF NOT EXISTS inventory (id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE, store TEXT NOT NULL, quantity INTEGER NOT NULL DEFAULT 0, reserved INTEGER NOT NULL DEFAULT 0, reorder_level INTEGER NOT NULL DEFAULT 2, UNIQUE(product_id, store))`,
   `CREATE TABLE IF NOT EXISTS sales (id INTEGER PRIMARY KEY AUTOINCREMENT, receipt_no TEXT NOT NULL UNIQUE, store TEXT NOT NULL, customer_id INTEGER REFERENCES customers(id), type TEXT NOT NULL, subtotal REAL NOT NULL, adjustment REAL NOT NULL DEFAULT 0, total REAL NOT NULL, cash_amount REAL NOT NULL DEFAULT 0, card_amount REAL NOT NULL DEFAULT 0, bank_amount REAL NOT NULL DEFAULT 0, gift_amount REAL NOT NULL DEFAULT 0, gift_code_used TEXT, fiscal_status TEXT NOT NULL DEFAULT 'pending', fiscal_document_type TEXT NOT NULL DEFAULT 'receipt', created_by INTEGER NOT NULL REFERENCES users(id), created_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS sale_items (id INTEGER PRIMARY KEY AUTOINCREMENT, sale_id INTEGER NOT NULL REFERENCES sales(id) ON DELETE CASCADE, product_id INTEGER REFERENCES products(id), description TEXT NOT NULL, quantity REAL NOT NULL, unit_price REAL NOT NULL, line_total REAL NOT NULL, discount_percent REAL NOT NULL DEFAULT 0, item_type TEXT NOT NULL, metadata TEXT)`,
   `CREATE TABLE IF NOT EXISTS fiscal_devices (id INTEGER PRIMARY KEY AUTOINCREMENT, store TEXT NOT NULL UNIQUE, vendor TEXT NOT NULL, model TEXT NOT NULL, connector TEXT NOT NULL, token_hash TEXT, enabled INTEGER NOT NULL DEFAULT 0, last_seen_at TEXT, last_status TEXT NOT NULL DEFAULT 'not_configured', last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
@@ -157,6 +157,12 @@ export async function ensureDatabase() {
   const customerColumnNames = new Set((customerColumns.results ?? []).map((column) => column.name));
   if (!customerColumnNames.has("active")) {
     try { await db.prepare(`ALTER TABLE customers ADD COLUMN active INTEGER NOT NULL DEFAULT 1`).run(); }
+    catch (error) { if (!(error instanceof Error) || !/duplicate column/i.test(error.message)) throw error; }
+  }
+  const inventoryColumns = await db.prepare(`PRAGMA table_info(inventory)`).all<{ name: string }>();
+  const inventoryColumnNames = new Set((inventoryColumns.results ?? []).map((column) => column.name));
+  if (!inventoryColumnNames.has("reorder_level")) {
+    try { await db.prepare(`ALTER TABLE inventory ADD COLUMN reorder_level INTEGER NOT NULL DEFAULT 2`).run(); }
     catch (error) { if (!(error instanceof Error) || !/duplicate column/i.test(error.message)) throw error; }
   }
   await db.prepare(`UPDATE users SET username = 'admin', display_name = 'Amministratore', role = 'admin', store = NULL, must_change_password = 0 WHERE username = 'amministratore' AND NOT EXISTS (SELECT 1 FROM users WHERE username = 'admin')`).run();

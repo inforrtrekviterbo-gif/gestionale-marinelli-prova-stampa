@@ -1,0 +1,1 @@
+ALTER TABLE `inventory` ADD `reorder_level` integer DEFAULT 2 NOT NULL;

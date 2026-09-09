@@ -1,0 +1,16 @@
+{
+  "name": "Gestionale Stefano Marinelli",
+  "short_name": "Gestionale SM",
+  "description": "Gestionale per i negozi Viterbo e Gran Sasso",
+  "lang": "it",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#000000",
+  "theme_color": "#05090c",
+  "icons": [
+    { "src": "/pwa-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/pwa-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

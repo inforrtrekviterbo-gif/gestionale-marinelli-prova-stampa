@@ -85,6 +85,13 @@
       "when": 1787169774856,
       "tag": "0011_fresh_malcolm_colcord",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1788991311200,
+      "tag": "0012_fancy_stellaris",
+      "breakpoints": true
     }
   ]
 }
