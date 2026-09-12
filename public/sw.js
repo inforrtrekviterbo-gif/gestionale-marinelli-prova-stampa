@@ -1,5 +1,6 @@
-const CACHE_NAME = "gestionale-sm-v1";
+const CACHE_NAME = "gestionale-sm-v2";
 const APP_SHELL = ["/", "/manifest.webmanifest", "/ms-logo.png", "/gestionale-wordmark.png", "/pwa-icon-192.png", "/pwa-icon-512.png", "/apple-touch-icon.png"];
+const IMMUTABLE = "/assets/";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => Promise.allSettled(APP_SHELL.map((url) => cache.add(url)))));
@@ -11,11 +12,19 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
+function keep(request, response) {
+  if (response.ok) {
+    const copy = response.clone();
+    caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+  }
+  return response;
+}
+
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   if (request.method !== "GET") return;
   const url = new URL(request.url);
-  if (url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;
+  if (url.origin !== self.location.origin || url.pathname.startsWith("/api/") || url.pathname === "/sw.js") return;
   if (request.mode === "navigate") {
     event.respondWith(fetch(request).then((response) => {
       const copy = response.clone();
@@ -24,11 +33,13 @@ self.addEventListener("fetch", (event) => {
     }).catch(() => caches.match("/")));
     return;
   }
-  event.respondWith(caches.match(request).then((cached) => cached || fetch(request).then((response) => {
-    if (response.ok) {
-      const copy = response.clone();
-      caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
-    }
-    return response;
-  })));
+  // Vite mette qui i file con l'impronta nel nome: stesso nome, stesso
+  // contenuto, per sempre. La cache basta.
+  if (url.pathname.startsWith(IMMUTABLE)) {
+    event.respondWith(caches.match(request).then((cached) => cached || fetch(request).then((response) => keep(request, response))));
+    return;
+  }
+  // Tutto il resto (icone, manifest, pacchetti del ponte RT) puo` cambiare
+  // restando allo stesso indirizzo: prima la rete, la cache solo se offline.
+  event.respondWith(fetch(request).then((response) => keep(request, response)).catch(() => caches.match(request)));
 });
