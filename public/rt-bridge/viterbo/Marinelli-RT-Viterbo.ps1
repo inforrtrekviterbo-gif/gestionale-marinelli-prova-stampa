@@ -12,11 +12,15 @@
 #   Autotest          ... -SelfTest
 #
 # Dopo l'installazione il ponte parte da solo all'ACCENSIONE del computer,
-# come SISTEMA, senza che nessuno debba accedere a Windows.
+# come SISTEMA, senza che nessuno debba accedere a Windows, e resta nascosto.
 #
-# Il corpo del ponte (dalla riga marcata piu' sotto) e' identico al file
-# MarinelliRTBridge.ps1 collaudato sulla cassa di Viterbo. Non e' stato
-# riscritto: e' stato incorporato riga per riga.
+# La chiave del negozio non va piu' ridigitata a mano: quando nel gestionale
+# premi Rigenera chiave, la pagina la consegna al ponte sul canale locale gia'
+# aperto e il ponte la salva da solo. Vedi Set-ChiavePonte piu' sotto.
+#
+# Il corpo del ponte (dalla riga marcata piu' sotto) e' quello collaudato sulla
+# cassa di Viterbo, incorporato riga per riga da MarinelliRTBridge.ps1. L'unica
+# aggiunta e' il comando locale setDeviceToken.
 # =============================================================================
 
 param(
@@ -30,11 +34,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $script:Negozio = "Viterbo"
 $script:CartellaInstallazione = Join-Path $env:ProgramData "MarinelliRTBridge\Viterbo"
 $script:NomeAttivita = "Marinelli RT Bridge - Viterbo"
 $script:NomeFile = "Marinelli-RT-Viterbo.ps1"
+$script:FormaChiave = '^msrt_[A-Za-z0-9_-]{20,}$'
 
 # Valori di partenza, gli stessi di config-viterbo.example.json.
 # Durante l'installazione finiscono in config.json insieme alla chiave.
@@ -71,11 +77,77 @@ function Test-Amministratore {
 }
 
 function Get-NomeSistema {
-  # SID S-1-5-18 = account SISTEMA. Tradotto perche' su Windows italiano
-  # si chiama "NT AUTHORITY\SYSTEM" o "AUTORITA' NT\SISTEMA" a seconda della
-  # versione, e netsh vuole il nome giusto.
+  # SID S-1-5-18 = account SISTEMA. Tradotto perche' su Windows italiano il
+  # nome cambia e netsh vuole quello giusto.
   $sid = New-Object Security.Principal.SecurityIdentifier("S-1-5-18")
   return $sid.Translate([Security.Principal.NTAccount]).Value
+}
+
+# Restituisce $null se la chiave e' buona, altrimenti il motivo del rifiuto.
+function Test-ChiaveSulGestionale {
+  param([string]$BaseUrl, [string]$Store, [string]$Token)
+  if ([string]::IsNullOrWhiteSpace($Token)) { return "Nessuna chiave impostata." }
+  $uri = "$($BaseUrl.TrimEnd('/'))/api/fiscal?store=$([Uri]::EscapeDataString($Store))&action=status"
+  try {
+    Invoke-RestMethod -Method Get -Uri $uri -Headers @{ Authorization = "Bearer $Token" } -UseBasicParsing -TimeoutSec 30 | Out-Null
+    return $null
+  } catch [Net.WebException] {
+    $stato = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
+    if ($stato -eq 401) { return "Il gestionale rifiuta questa chiave (401). Controlla che in Amministrazione > Registratori RT lo Stato di $Store sia Abilitato." }
+    if ($stato -eq 400) { return "Il gestionale non riconosce il negozio '$Store'." }
+    if ($stato -gt 0) { return "Il gestionale ha risposto $stato." }
+    return "Gestionale non raggiungibile: $($_.Exception.Message)"
+  } catch {
+    return "Gestionale non raggiungibile: $($_.Exception.Message)"
+  }
+}
+
+# Comando locale setDeviceToken: il gestionale consegna qui la chiave appena
+# rigenerata, sul canale WebSocket che ha gia' aperto.
+#
+# La chiave viene provata PRIMA di essere scritta: se non e' buona, config.json
+# resta quello di prima e il ponte continua a girare com'era. Il caso peggiore
+# e' che non cambi niente.
+function Set-ChiavePonte {
+  param([object]$Request)
+
+  $negozioRichiesto = [string]$Request.store
+  if ($negozioRichiesto -ne [string]$script:Config.Store) {
+    Write-BridgeLog "Chiave rifiutata: arrivata per '$negozioRichiesto' ma questo ponte e' $($script:Config.Store)." "WARN"
+    return @{ ok = $false; code = "STORE_MISMATCH"; error = "Questo ponte e' configurato per $($script:Config.Store)." }
+  }
+
+  $nuova = ([string]$Request.token).Trim()
+  if ($nuova -notmatch $script:FormaChiave) {
+    Write-BridgeLog "Chiave rifiutata: forma non valida." "WARN"
+    return @{ ok = $false; code = "INVALID_TOKEN"; error = "La chiave non ha la forma attesa." }
+  }
+
+  if ($nuova -eq [string]$script:Config.DeviceToken) {
+    Write-BridgeLog "Chiave gia' in uso, niente da fare."
+    return @{ ok = $true; changed = $false; store = [string]$script:Config.Store }
+  }
+
+  $problema = Test-ChiaveSulGestionale -BaseUrl $script:Config.ApiBaseUrl -Store $script:Config.Store -Token $nuova
+  if ($problema) {
+    Write-BridgeLog "Chiave nuova non accettata dal gestionale: $problema" "WARN"
+    return @{ ok = $false; code = "TOKEN_REFUSED"; error = $problema }
+  }
+
+  $percorso = $ConfigPath
+  if (-not (Test-Path -LiteralPath $percorso)) {
+    return @{ ok = $false; code = "NO_CONFIG"; error = "config.json non trovato: $percorso" }
+  }
+  Copy-Item -LiteralPath $percorso -Destination "$percorso.bak" -Force
+  $salvata = Get-Content -LiteralPath $percorso -Raw | ConvertFrom-Json
+  $salvata.DeviceToken = $nuova
+  ($salvata | ConvertTo-Json -Depth 20) | Set-Content -LiteralPath $percorso -Encoding UTF8
+
+  # Invoke-BridgeApi rilegge $script:Config.DeviceToken a ogni chiamata,
+  # quindi aggiornarlo qui basta: niente riavvio del ponte.
+  $script:Config.DeviceToken = $nuova
+  Write-BridgeLog "Chiave aggiornata dal gestionale e salvata (copia in config.json.bak)."
+  return @{ ok = $true; changed = $true; store = [string]$script:Config.Store }
 }
 
 function Set-RiservaPortaLocale([int]$Porta) {
@@ -109,32 +181,52 @@ function Install-PonteViterbo {
   $script:Config = $null
   Write-Host "Autotest superato." -ForegroundColor Green
 
-  # 2. Chiave del negozio.
-  if ([string]::IsNullOrWhiteSpace($Chiave)) {
-    $chiaveProtetta = Read-Host "Incolla la chiave generata in Amministrazione > Registratori RT" -AsSecureString
-    $puntatore = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($chiaveProtetta)
-    try { $Chiave = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($puntatore) }
-    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($puntatore) }
+  # 2. Se c'e' gia' una configurazione, si riparte da quella: cosi' un
+  #    reinstallo non perde l'indirizzo della cassa ne' la chiave.
+  $configurazione = $null
+  $chiaveGiaBuona = $false
+  if (Test-Path -LiteralPath $ConfigPath) {
+    try {
+      $configurazione = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
+      Write-Host "Trovata una configurazione gia' presente: $ConfigPath" -ForegroundColor Cyan
+      Write-Host "Controllo la chiave gia' installata..." -ForegroundColor Gray
+      $problemaAttuale = Test-ChiaveSulGestionale -BaseUrl $configurazione.ApiBaseUrl -Store $configurazione.Store -Token $configurazione.DeviceToken
+      if (-not $problemaAttuale) {
+        $chiaveGiaBuona = $true
+        Write-Host "La chiave gia' installata funziona: non serve rigenerarla." -ForegroundColor Green
+      } else {
+        Write-Host "La chiave installata non va piu' bene: $problemaAttuale" -ForegroundColor Yellow
+      }
+    } catch {
+      Write-Host "Configurazione presente ma illeggibile, si riparte dai valori di fabbrica." -ForegroundColor Yellow
+      $configurazione = $null
+    }
   }
-  if ([string]::IsNullOrWhiteSpace($Chiave) -or $Chiave.Trim().Length -lt 24) {
-    Stop-ConMessaggio "La chiave inserita non e' valida."
+  if (-not $configurazione) { $configurazione = [pscustomobject]$script:ConfigurazioneDiPartenza }
+
+  # 3. La chiave si chiede solo se serve davvero.
+  if (-not $chiaveGiaBuona) {
+    if ([string]::IsNullOrWhiteSpace($Chiave)) {
+      Write-Host ""
+      Write-Host "Nel gestionale, come amministratore: Amministrazione > Registratori RT > Rigenera chiave."
+      $chiaveProtetta = Read-Host "Incolla qui la chiave" -AsSecureString
+      $puntatore = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($chiaveProtetta)
+      try { $Chiave = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($puntatore) }
+      finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($puntatore) }
+    }
+    $Chiave = ([string]$Chiave).Trim()
+    if ($Chiave -notmatch $script:FormaChiave) {
+      Stop-ConMessaggio "Questa non sembra una chiave del ponte: deve iniziare con msrt_ . Ricopiala per intero."
+    }
+    Write-Host "Verifica della chiave sul gestionale..." -ForegroundColor Cyan
+    $problema = Test-ChiaveSulGestionale -BaseUrl $configurazione.ApiBaseUrl -Store $script:Negozio -Token $Chiave
+    if ($problema) { Stop-ConMessaggio $problema }
+    $configurazione.DeviceToken = $Chiave
+    Write-Host "Chiave verificata." -ForegroundColor Green
   }
 
-  $configurazione = [pscustomobject]$script:ConfigurazioneDiPartenza
-  $configurazione.DeviceToken = $Chiave.Trim()
   $configurazione.LogPath = Join-Path $script:CartellaInstallazione "bridge.log"
   $configurazione.FiscalJobsNotBeforeUtc = [DateTime]::UtcNow.ToString("o")
-
-  # 3. La chiave deve essere accettata dal gestionale.
-  Write-Host "Verifica e associazione della chiave $script:Negozio..." -ForegroundColor Cyan
-  try {
-    $intestazioni = @{ Authorization = "Bearer $($configurazione.DeviceToken)" }
-    $corpo = @{ action = "heartbeat"; store = $script:Negozio; status = "installing"; error = "" } | ConvertTo-Json -Compress
-    Invoke-RestMethod -Method Post -Uri "$($configurazione.ApiBaseUrl.TrimEnd('/'))/api/fiscal" -Headers $intestazioni -ContentType "application/json; charset=utf-8" -Body $corpo -UseBasicParsing -TimeoutSec 30 | Out-Null
-  } catch {
-    Stop-ConMessaggio "La chiave e' stata rifiutata dal gestionale. Genera una nuova chiave di Viterbo e ripeti. Dettaglio: $($_.Exception.Message)"
-  }
-  Write-Host "Chiave verificata e ponte abilitato." -ForegroundColor Green
 
   # 4. La cassa deve rispondere.
   if ([Environment]::UserInteractive) {
@@ -159,15 +251,14 @@ function Install-PonteViterbo {
   $destinazione = Join-Path $script:CartellaInstallazione $script:NomeFile
   $origine = $PSCommandPath
   if ([string]::IsNullOrWhiteSpace($origine)) { Stop-ConMessaggio "Impossibile capire da dove sta girando questo file." }
-  if ((Resolve-Path -LiteralPath $origine).Path -ne (Join-Path $script:CartellaInstallazione $script:NomeFile)) {
+  if ((Resolve-Path -LiteralPath $origine).Path -ne $destinazione) {
     Copy-Item -LiteralPath $origine -Destination $destinazione -Force
   }
 
   # 6. config.json, leggibile solo da SISTEMA e amministratori.
-  $percorsoConfig = Join-Path $script:CartellaInstallazione "config.json"
-  $configurazione | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $percorsoConfig -Encoding UTF8
+  $configurazione | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $ConfigPath -Encoding UTF8
   $sistema = Get-NomeSistema
-  & icacls.exe $percorsoConfig /inheritance:r /grant:r "${sistema}:(F)" "*S-1-5-32-544:(F)" | Out-Null
+  & icacls.exe $ConfigPath /inheritance:r /grant:r "${sistema}:(F)" "*S-1-5-32-544:(F)" | Out-Null
 
   # 7. Riserva della porta locale a nome di SISTEMA.
   $portaLocale = if ($configurazione.LocalWebSocketPort) { [int]$configurazione.LocalWebSocketPort } else { 8080 }
@@ -177,7 +268,7 @@ function Install-PonteViterbo {
   #    Un minuto di ritardo: all'accensione la rete del negozio non e'
   #    ancora pronta e la cassa non risponderebbe.
   $powerShell = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-  $argomenti = "-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$destinazione`" -ConfigPath `"$percorsoConfig`""
+  $argomenti = "-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$destinazione`" -ConfigPath `"$ConfigPath`""
   $azione = New-ScheduledTaskAction -Execute $powerShell -Argument $argomenti -WorkingDirectory $script:CartellaInstallazione
   $innesco = New-ScheduledTaskTrigger -AtStartup
   $innesco.Delay = "PT1M"
@@ -198,9 +289,9 @@ function Install-PonteViterbo {
   Write-Host "Non serve che nessuno acceda a Windows."
   Write-Host "Canale locale:    ws://localhost:$portaLocale"
   Write-Host "File installato:  $destinazione"
-  Write-Host "Configurazione:   $percorsoConfig"
+  Write-Host "Configurazione:   $ConfigPath"
   Write-Host "Registro tecnico: $($configurazione.LogPath)"
-  Write-Host "`nTorna nel gestionale e attendi lo stato COLLEGATO." -ForegroundColor Green
+  Write-Host "`nDa ora, quando rigeneri la chiave nel gestionale, arriva qui da sola." -ForegroundColor Green
   Write-Host "Prima dell'uso ordinario fai uno scontrino di prova in modalita' formazione e verifica reparto 1, pagamenti 1/4 e stati aggiuntivi con il tecnico fiscale." -ForegroundColor Yellow
   if ([Environment]::UserInteractive) { Read-Host "Premi INVIO per chiudere" }
   exit 0
@@ -234,10 +325,11 @@ function Uninstall-PonteViterbo {
 }
 
 # =============================================================================
-# Da qui in giu' e' il ponte collaudato di Viterbo, incorporato alla lettera
-# da MarinelliRTBridge.ps1. Non modificare senza rifare il collaudo in negozio:
-# ConvertTo-RchDescription deve restare identica a cleanRchDescription in
-# app/cash-register.tsx, carattere per carattere.
+# Da qui in giu' e' il ponte collaudato di Viterbo, incorporato alla lettera da
+# MarinelliRTBridge.ps1. L'unica aggiunta e' il ramo setDeviceToken dentro
+# Start-LocalWebSocketBridge. Non modificare il resto senza rifare il collaudo
+# in negozio: ConvertTo-RchDescription deve restare identica a
+# cleanRchDescription in app/cash-register.tsx, carattere per carattere.
 # =============================================================================
 
 function Write-BridgeLog {
@@ -934,6 +1026,8 @@ function Start-LocalWebSocketBridge {
           }
         } elseif ([string]$request.action -eq "printFiscalReceipt") {
           $response = Invoke-TicketedFiscalPrint -Request $request
+        } elseif ([string]$request.action -eq "setDeviceToken") {
+          $response = Set-ChiavePonte -Request $request
         } else {
           $response = @{ ok = $false; code = "INVALID_ACTION"; error = "Operazione locale non disponibile." }
         }
@@ -972,7 +1066,7 @@ function Start-LocalWebSocketBridge {
 }
 
 
-# --- smistamento: installazione e disinstalazione prima del ponte ---
+# --- smistamento: installazione e disinstallazione prima del ponte ---
 if ($Installa) { Install-PonteViterbo }
 if ($Disinstalla) { Uninstall-PonteViterbo }
 

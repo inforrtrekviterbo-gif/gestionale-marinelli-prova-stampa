@@ -136,7 +136,7 @@ function buildRchReceiptCommands(payload: LocalFiscalPayload | null | undefined)
 }
 
 // --- UNIVERSAL LOCAL BRIDGE CONNECTOR ---
-function localFiscalBridgeRequest(message: Record<string, unknown> | string, responseTimeout = 200000) {
+export function localFiscalBridgeRequest(message: Record<string, unknown> | string, responseTimeout = 200000) {
   return new Promise<Record<string, unknown>>((resolve, reject) => {
     const isPrint = typeof message === "object" && message !== null && message.action === "printFiscalReceipt";
     if (isPrint) localFiscalPrintActive = true;

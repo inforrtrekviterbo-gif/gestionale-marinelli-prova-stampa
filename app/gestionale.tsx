@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type InputHTMLAttributes, type ReactNode } from "react";
 import { onIdTokenChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { onValue, ref } from "firebase/database";
-import NewCashRegister from "./cash-register";
+import NewCashRegister, { localFiscalBridgeRequest } from "./cash-register";
 import PwaInstallButton from "./pwa-install";
 import { establishServerSession, firebaseAuth, firebaseAuthenticatedFetch, firebaseDatabase, firebaseEmailForUsername } from "../lib/firebase-client";
 import { firebaseStoreNode } from "../lib/firebase-config";
@@ -593,7 +593,17 @@ function FiscalRegisters({ data, reload }: { data: Bootstrap; reload: () => Prom
     try {
       const result = await post("regenerateFiscalToken", { store });
       setRevealed({ store, token: result.token });
-      setMessage(`Chiave ${store} generata. Copiala ora e avvia il pacchetto del negozio: l'installazione la verificherà e abiliterà automaticamente il ponte.`);
+      // Il ponte di questo PC tiene già aperto il canale locale: se è quello del
+      // negozio giusto la chiave gli arriva da sola, senza incollarla a mano.
+      // Il ponte la verifica prima di salvarla e rifiuta quelle di altri negozi.
+      let consegnata = false;
+      try {
+        await localFiscalBridgeRequest({ action: "setDeviceToken", store, token: result.token }, 20000);
+        consegnata = true;
+      } catch { consegnata = false; }
+      setMessage(consegnata
+        ? `Chiave ${store} generata e consegnata al ponte di questo PC. Non serve incollarla da nessuna parte: attendi lo stato COLLEGATO.`
+        : `Chiave ${store} generata. Il ponte di ${store} non risponde da questo PC: copiala ora e avvia il file del negozio sul PC della cassa.`);
       await reload();
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Errore."); }
   }
