@@ -17,7 +17,7 @@
     "gift": 10
   },
   "RchConnectTimeoutMilliseconds": 5000,
-  "RchResponseTimeoutSeconds": 180,
+  "RchResponseTimeoutSeconds": 20,
   "RchFiscalProtocolValidated": true,
   "FiscalJobsNotBeforeUtc": "IMPOSTATO_AUTOMATICAMENTE_DALL_INSTALLAZIONE",
   "LogPath": "C:\\ProgramData\\MarinelliRTBridge\\Viterbo\\bridge.log"

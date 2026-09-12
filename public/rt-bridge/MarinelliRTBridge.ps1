@@ -34,10 +34,21 @@ function Invoke-BridgeApi {
   param([string]$Method, [string]$Path, [object]$Body = $null)
   $headers = @{ Authorization = "Bearer $($script:Config.DeviceToken)" }
   $uri = "$($script:Config.ApiBaseUrl.TrimEnd('/'))$Path"
-  if ($null -eq $Body) {
-    return Invoke-RestMethod -Method $Method -Uri $uri -Headers $headers -UseBasicParsing -TimeoutSec 30
+  try {
+    if ($null -eq $Body) {
+      return Invoke-RestMethod -Method $Method -Uri $uri -Headers $headers -UseBasicParsing -TimeoutSec 30
+    }
+    return Invoke-RestMethod -Method $Method -Uri $uri -Headers $headers -ContentType "application/json; charset=utf-8" -Body ($Body | ConvertTo-Json -Depth 20 -Compress) -UseBasicParsing -TimeoutSec 30
+  } catch [System.Net.WebException] {
+    # "(401) Non autorizzato" da solo non dice cosa fare: il gestionale risponde
+    # cosi sia quando la chiave in config.json non e' piu' quella buona, sia
+    # quando il ponte del negozio e' stato disabilitato dal pannello admin.
+    $status = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
+    if ($status -eq 401) {
+      throw "Il gestionale rifiuta la chiave del ponte $($script:Config.Store) (401). Nel gestionale, come amministratore, apri Amministrazione > Registratori RT: verifica che lo Stato del negozio sia Abilitato, poi usa Rigenera chiave e lancia Aggiorna-Chiave sul PC della cassa."
+    }
+    throw
   }
-  return Invoke-RestMethod -Method $Method -Uri $uri -Headers $headers -ContentType "application/json; charset=utf-8" -Body ($Body | ConvertTo-Json -Depth 20 -Compress) -UseBasicParsing -TimeoutSec 30
 }
 
 function Format-ItalianNumber([double]$Value) {
@@ -155,6 +166,7 @@ function Read-RchFrame {
   return [pscustomobject]@{
     Data = [Text.Encoding]::ASCII.GetString($frame, 7, $dataLength)
     PacketId = [char]$frame[$packetIdIndex]
+    Raw = $frame
   }
 }
 
@@ -175,17 +187,28 @@ function ConvertFrom-RchFrame {
 
 function Read-RchReply {
   param([System.IO.Stream]$Stream, [char]$ExpectedPacketId)
-  $first = $Stream.ReadByte()
-  if ($first -lt 0) { throw "RCH non ha restituito alcuna risposta." }
   $acknowledged = $false
-  if ($first -eq 0x06) {
-    $acknowledged = $true
+  # Il byte che precede il checksum NON e' l'eco dell'identificativo inviato: la
+  # RCH ci mette un valore proprio (nei log di Viterbo risponde sempre '8' anche
+  # quando il comando parte con '0'). Scartare la risposta perche' "il pacchetto
+  # non corrisponde" bloccava il ponte fino al timeout lasciando lo scontrino
+  # aperto sul registratore. Il protocollo e' comando/risposta: il primo frame
+  # valido che arriva e' l'esito del comando appena inviato.
+  for ($lettura = 0; $lettura -lt 10; $lettura++) {
     $first = $Stream.ReadByte()
-    if ($first -lt 0) { throw "RCH ha confermato la ricezione ma non ha inviato l'esito." }
+    if ($first -lt 0) {
+      if ($acknowledged) { throw "RCH ha confermato la ricezione ma non ha inviato l'esito." }
+      throw "RCH non ha restituito alcuna risposta."
+    }
+    if ($first -eq 0x06) { $acknowledged = $true; continue }
+    if ($first -eq 0x15) { throw "RCH ha risposto NACK: pacchetto non ricevuto correttamente." }
+    $frame = Read-RchFrame -Stream $Stream -FirstByte $first
+    if ($frame.PacketId -ne $ExpectedPacketId) {
+      Write-BridgeLog "RCH risponde con identificativo '$($frame.PacketId)' al posto di '$ExpectedPacketId'. Esito accettato ugualmente. Dati: $($frame.Data)."
+    }
+    return (ConvertFrom-RchFrame -Frame $frame -Acknowledged $acknowledged)
   }
-  $frame = Read-RchFrame -Stream $Stream -FirstByte $first
-  if ($frame.PacketId -ne $ExpectedPacketId) { throw "Risposta RCH associata a un pacchetto differente." }
-  return (ConvertFrom-RchFrame -Frame $frame -Acknowledged $acknowledged)
+  throw "RCH ha inviato solo conferme di ricezione senza alcun esito."
 }
 
 function Assert-RchSuccess {
@@ -200,6 +223,7 @@ function Assert-RchSuccess {
 function Invoke-RchCommand {
   param([System.IO.Stream]$Stream, [string]$Command, [char]$PacketId)
   [byte[]]$packet = New-RchPacket -Data $Command -PacketId $PacketId
+  Write-BridgeLog "RCH invio [$PacketId] $Command | grezzo: $([BitConverter]::ToString($packet))"
   $Stream.Write($packet, 0, $packet.Length)
   $Stream.Flush()
   $reply = Read-RchReply -Stream $Stream -ExpectedPacketId $PacketId
@@ -218,62 +242,19 @@ function Invoke-RchFidelityClose {
     [char]$PaymentPacketId,
     [char]$ClosePacketId
   )
-  [byte[]]$paymentPacket = New-RchPacket -Data $PaymentCommand -PacketId $PaymentPacketId
-  $Stream.Write($paymentPacket, 0, $paymentPacket.Length)
-  $Stream.Flush()
-  Write-BridgeLog "Pagamento RCH inviato; invio immediato della chiusura Fidelity compatibile con ACK attivo o disattivato."
-
   # Con Opzione Fidelity attiva il comando di pagamento apre il cassetto ma il
-  # documento viene stampato soltanto dopo il terminatore =c. L'ACK del RT puo
-  # essere disattivato: non va quindi atteso prima di accodare la chiusura.
-  Start-Sleep -Milliseconds 100
-  [byte[]]$closePacket = New-RchPacket -Data "=c" -PacketId $ClosePacketId
-  $Stream.Write($closePacket, 0, $closePacket.Length)
-  $Stream.Flush()
-  Write-BridgeLog "Chiusura Fidelity RCH (=c) inviata."
-
-  $paymentAcknowledged = $false
-  $paymentReply = $null
-  $closeAcknowledged = $false
-  $closeReply = $null
-  $ackCount = 0
-  for ($messageIndex = 0; $messageIndex -lt 40 -and -not $closeReply; $messageIndex++) {
-    $next = $Stream.ReadByte()
-    if ($next -lt 0) { throw "RCH ha chiuso la connessione prima dell'esito della chiusura Fidelity." }
-    if ($next -eq 0x06) {
-      $ackCount++
-      if ($ackCount -eq 1) { $paymentAcknowledged = $true }
-      else { $closeAcknowledged = $true }
-      continue
-    }
-    if ($next -eq 0x15) { throw "RCH ha rifiutato il pagamento o la chiusura Fidelity (NACK)." }
-    $frame = Read-RchFrame -Stream $Stream -FirstByte $next
-    $reply = ConvertFrom-RchFrame -Frame $frame -Acknowledged ($ackCount -gt 0)
-    if ($frame.PacketId -eq $PaymentPacketId) {
-      if ($reply.ErrorFamily -eq "P" -and $reply.Follows -eq "1") {
-        Write-BridgeLog "RCH segnala fine carta durante il pagamento: sostituire il rotolo." "WARN"
-        continue
-      }
-      Assert-RchSuccess -Reply $reply
-      $paymentReply = $reply
-      continue
-    }
-    if ($frame.PacketId -ne $ClosePacketId) { throw "Risposta RCH inattesa durante la chiusura Fidelity." }
-    if ($reply.ErrorFamily -eq "P" -and $reply.Follows -eq "1") {
-      Write-BridgeLog "RCH segnala fine carta durante la chiusura Fidelity: sostituire il rotolo." "WARN"
-      continue
-    }
-    Assert-RchSuccess -Reply $reply
-    $closeReply = $reply
-  }
-  if (-not $closeReply) { throw "RCH non ha confermato la chiusura Fidelity." }
-  $paymentWasAcknowledged = $paymentAcknowledged -or [bool]$paymentReply -or [bool]$closeReply
-  $paymentState = if ($paymentReply) { $paymentReply.DocumentState } else { "CHIUSO" }
-  $closeWasAcknowledged = $closeAcknowledged -or [bool]$closeReply
+  # documento viene stampato soltanto dopo il terminatore =c. I due comandi
+  # vanno comunque inviati uno alla volta aspettando l'esito: accodarli senza
+  # leggere la risposta intermedia rendeva impossibile capire quale dei due
+  # avesse fallito e lasciava lo scontrino aperto sul registratore.
+  $paymentReply = Invoke-RchCommand -Stream $Stream -Command $PaymentCommand -PacketId $PaymentPacketId
+  Write-BridgeLog "Pagamento RCH accettato; invio della chiusura Fidelity (=c)."
+  $closeReply = Invoke-RchCommand -Stream $Stream -Command "=c" -PacketId $ClosePacketId
+  Write-BridgeLog "Chiusura Fidelity RCH completata."
   return [pscustomobject]@{
-    PaymentAcknowledged = $paymentWasAcknowledged
-    PaymentState = $paymentState
-    CloseAcknowledged = $closeWasAcknowledged
+    PaymentAcknowledged = $paymentReply.Acknowledged
+    PaymentState = $paymentReply.DocumentState
+    CloseAcknowledged = $closeReply.Acknowledged
     CloseState = $closeReply.DocumentState
   }
 }
@@ -403,7 +384,9 @@ function Invoke-RchRawCommand {
   if ($first -eq 0x06) { $first = $Stream.ReadByte() }
   if ($first -lt 0) { throw "RCH non ha restituito alcuna risposta." }
   $frame = Read-RchFrame -Stream $Stream -FirstByte $first
-  if ($frame.PacketId -ne $PacketId) { throw "Risposta RCH associata a un pacchetto differente." }
+  if ($frame.PacketId -ne $PacketId) {
+    Write-BridgeLog "Lettura dati fiscali: identificativo atteso '$PacketId', ricevuto '$($frame.PacketId)'. Risposta accettata ugualmente."
+  }
   return [string]$frame.Data
 }
 
@@ -436,13 +419,11 @@ function Add-RchPayments {
   }
   $sum = [long](($amounts.Values | Measure-Object -Sum).Sum)
   if ($sum -ne $TargetCents) { throw "La somma dei pagamenti RCH non coincide con il totale del documento." }
+  # Solo il contante puo' chiudere lo scontrino senza importo: "=T1" da solo
+  # significa "paga tutto in contanti". Per ogni altra forma di pagamento la RCH
+  # pretende l'importo esplicito: "=T4" nudo fa comparire IMPORTO OBBLIGATORIO
+  # sul display e blocca il documento con errore E24.
   if ($amounts.Count -eq 1 -and [long]$amounts.cash -eq $TargetCents) { $Commands.Add('=T1'); return }
-  if ($amounts.Count -eq 1 -and [long]$amounts.card -eq $TargetCents) { $Commands.Add('=T4'); return }
-  if ($amounts.Count -eq 2 -and $amounts.ContainsKey('cash') -and $amounts.ContainsKey('card')) {
-    $Commands.Add("=T1/`$$([long]$amounts.cash)")
-    $Commands.Add('=T4')
-    return
-  }
   $order = @('gift','cash','bank','card')
   foreach ($method in $order) {
     if (-not $amounts.ContainsKey($method) -or [long]$amounts[$method] -le 0) { continue }
@@ -518,21 +499,58 @@ function Invoke-RchStandardTcp {
     $client.EndConnect($pending)
     $client.NoDelay = $true
     $stream = $client.GetStream()
-    $stream.ReadTimeout = if ($script:Config.RchResponseTimeoutSeconds) { [int]$script:Config.RchResponseTimeoutSeconds * 1000 } else { 60000 }
+    # Attesa massima per l'esito di UN singolo comando. Valori alti (erano 180
+    # secondi) non aiutano: se il registratore non risponde entro pochi secondi
+    # non risponde piu', e nel frattempo il ponte resta bloccato e il gestionale
+    # vede la cassa scollegata. Il valore in config viene limitato a 60 secondi.
+    $responseTimeout = if ($script:Config.RchResponseTimeoutSeconds) { [int]$script:Config.RchResponseTimeoutSeconds } else { 20 }
+    if ($responseTimeout -lt 5) { $responseTimeout = 5 }
+    if ($responseTimeout -gt 60) { $responseTimeout = 60 }
+    $stream.ReadTimeout = $responseTimeout * 1000
     $stream.WriteTimeout = 10000
-    $responses = New-Object System.Collections.Generic.List[object]
-    for ($index = 0; $index -lt $commands.Count; $index++) {
-      $packetId = [char](48 + ($index % 10))
-      if ($fidelityEnabled -and $index + 1 -lt $commands.Count -and $commands[$index] -match '^=T' -and $commands[$index + 1] -eq "=c") {
-        $closePacketId = [char](48 + (($index + 1) % 10))
-        $fidelity = Invoke-RchFidelityClose -Stream $stream -PaymentCommand $commands[$index] -PaymentPacketId $packetId -ClosePacketId $closePacketId
-        $responses.Add([pscustomobject]@{ sequence = $index + 1; acknowledged = $fidelity.PaymentAcknowledged; documentState = $fidelity.PaymentState })
-        $responses.Add([pscustomobject]@{ sequence = $index + 2; acknowledged = $fidelity.CloseAcknowledged; documentState = $fidelity.CloseState })
-        $index++
-        continue
+    # Un tentativo interrotto puo lasciare una risposta non letta nel buffer della
+    # RCH. Se resta li, viene scambiata per la risposta del primo comando nuovo e
+    # tutta la sequenza si sfasa di un pacchetto. Va scartata prima di iniziare.
+    Start-Sleep -Milliseconds 200
+    if ($stream.DataAvailable) {
+      [byte[]]$residuo = New-Object byte[] 4096
+      $totale = 0
+      while ($stream.DataAvailable -and $totale -lt $residuo.Length) {
+        $letti = $stream.Read($residuo, $totale, $residuo.Length - $totale)
+        if ($letti -le 0) { break }
+        $totale += $letti
       }
-      $reply = Invoke-RchCommand -Stream $stream -Command $commands[$index] -PacketId $packetId
-      $responses.Add([pscustomobject]@{ sequence = $index + 1; acknowledged = $reply.Acknowledged; documentState = $reply.DocumentState })
+      if ($totale -gt 0) {
+        $anteprima = [BitConverter]::ToString($residuo, 0, [Math]::Min(96, $totale))
+        Write-BridgeLog "Scartati $totale byte residui della RCH prima di iniziare lo scontrino: $anteprima" "WARN"
+      }
+    }
+    $responses = New-Object System.Collections.Generic.List[object]
+    $documentoAperto = $false
+    try {
+      for ($index = 0; $index -lt $commands.Count; $index++) {
+        $packetId = [char](48 + ($index % 10))
+        if ($fidelityEnabled -and $index + 1 -lt $commands.Count -and $commands[$index] -match '^=T' -and $commands[$index + 1] -eq "=c") {
+          $closePacketId = [char](48 + (($index + 1) % 10))
+          $fidelity = Invoke-RchFidelityClose -Stream $stream -PaymentCommand $commands[$index] -PaymentPacketId $packetId -ClosePacketId $closePacketId
+          $responses.Add([pscustomobject]@{ sequence = $index + 1; acknowledged = $fidelity.PaymentAcknowledged; documentState = $fidelity.PaymentState })
+          $responses.Add([pscustomobject]@{ sequence = $index + 2; acknowledged = $fidelity.CloseAcknowledged; documentState = $fidelity.CloseState })
+          $documentoAperto = $false
+          $index++
+          continue
+        }
+        $reply = Invoke-RchCommand -Stream $stream -Command $commands[$index] -PacketId $packetId
+        if ($commands[$index] -match '^=[RrVS]') { $documentoAperto = $true }
+        elseif ($commands[$index] -eq '=c') { $documentoAperto = $false }
+        $responses.Add([pscustomobject]@{ sequence = $index + 1; acknowledged = $reply.Acknowledged; documentState = $reply.DocumentState })
+      }
+    } catch {
+      if ($documentoAperto) {
+        $eseguiti = $responses.Count
+        Write-BridgeLog "Scontrino interrotto dopo $eseguiti comandi su $($commands.Count): sul registratore resta un documento fiscale aperto." "ERROR"
+        throw "$($_.Exception.Message) Lo scontrino e' rimasto aperto sul registratore dopo $eseguiti righe su $($commands.Count): chiudilo o annullalo dalla tastiera della RCH prima di ristampare."
+      }
+      throw
     }
     $fiscalReference = Get-RchFiscalReference -Stream $stream -PacketOffset $commands.Count
     return @{
@@ -640,6 +658,8 @@ function Start-LocalWebSocketBridge {
   if ($port -lt 1 -or $port -gt 65535) { throw "Porta WebSocket locale non valida: $port." }
   $prefix = "http://localhost:$port/"
   $allowedOrigin = ([string]$script:Config.ApiBaseUrl).TrimEnd('/')
+  $script:UltimoErroreWebSocket = $null
+  $script:RipetizioniErroreWebSocket = 0
   $listener = New-Object Net.HttpListener
   $listener.Prefixes.Add($prefix)
   $listener.Start()
@@ -660,7 +680,15 @@ function Start-LocalWebSocketBridge {
           $context.Response.Close()
           continue
         }
-        $webSocketContext = $context.AcceptWebSocketAsync([NullString]::Value).GetAwaiter().GetResult()
+        # Il gestionale chiede il sottoprotocollo "marinelli-rt": va restituito,
+        # altrimenti il browser chiude subito la connessione appena aperta.
+        $richiesti = [string]$context.Request.Headers['Sec-WebSocket-Protocol']
+        $sottoprotocollo = [NullString]::Value
+        if (-not [string]::IsNullOrWhiteSpace($richiesti)) {
+          $elenco = @($richiesti.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+          if ($elenco -contains "marinelli-rt") { $sottoprotocollo = "marinelli-rt" }
+        }
+        $webSocketContext = $context.AcceptWebSocketAsync($sottoprotocollo).GetAwaiter().GetResult()
         $socket = $webSocketContext.WebSocket
         $request = Receive-LocalWebSocketJson -Socket $socket
         if (-not $request) { continue }
@@ -677,7 +705,20 @@ function Start-LocalWebSocketBridge {
         }
         Send-LocalWebSocketJson -Socket $socket -Value $response
       } catch {
-        Write-BridgeLog "Richiesta WebSocket locale non riuscita: $($_.Exception.Message)" "WARN"
+        # Il gestionale riprova ogni dieci secondi: se l'errore e' sempre lo
+        # stesso, ripeterlo a ogni tentativo riempie il registro e nasconde le
+        # righe utili. Lo scriviamo la prima volta e poi ogni trenta tentativi.
+        $messaggio = $_.Exception.Message
+        if ($messaggio -eq $script:UltimoErroreWebSocket) {
+          $script:RipetizioniErroreWebSocket++
+          if ($script:RipetizioniErroreWebSocket % 30 -eq 0) {
+            Write-BridgeLog "Lo stesso errore si ripete da $($script:RipetizioniErroreWebSocket) tentativi: $messaggio" "WARN"
+          }
+        } else {
+          $script:UltimoErroreWebSocket = $messaggio
+          $script:RipetizioniErroreWebSocket = 0
+          Write-BridgeLog "Richiesta WebSocket locale non riuscita: $messaggio" "WARN"
+        }
         if ($socket -and $socket.State -eq [Net.WebSockets.WebSocketState]::Open) {
           try { Send-LocalWebSocketJson -Socket $socket -Value @{ ok = $false; code = "LOCAL_BRIDGE_ERROR"; error = $_.Exception.Message } } catch {}
         }
