@@ -213,7 +213,7 @@ function ReorderList({ data }: { data: Bootstrap }) {
       const priority: ReorderRow["priority"] = available <= 0 ? "urgent" : available <= Math.max(1, Math.floor(minimum / 2)) ? "critical" : "low";
       return [{ key: `${product.id}-${currentStore}`, product, store: currentStore, available, minimum, suggested, otherStore, otherAvailable, transferAmount, priority }];
     });
-  }).sort((left, right) => ({ urgent: 0, critical: 1, low: 2 }[left.priority] - { urgent: 0, critical: 1, low: 2 }[right.priority] || (left.available - left.minimum) - (right.available - right.minimum) || variantCollator.compare(`${left.product.brand} ${left.product.name} ${left.product.color} ${left.product.size}`, `${right.product.brand} ${right.product.name} ${right.product.color} ${right.product.size}`)), [data.products, store]);
+  }).sort((left, right) => ({ urgent: 0, critical: 1, low: 2 }[left.priority] - { urgent: 0, critical: 1, low: 2 }[right.priority] || (left.available - left.minimum) - (right.available - right.minimum) || variantCollator.compare(`${left.product.brand} ${left.product.name} ${left.product.color} ${left.product.size}`, `${right.product.brand} ${right.product.name} ${right.product.color} ${right.product.size}`))), [data.products, store]);
   const rows = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("it");
     return allRows.filter((row) => (!normalized || searchableProduct(row.product).includes(normalized)) && (brand === "Tutte" || row.product.brand === brand) && (category === "Tutte" || row.product.category === category) && (priority === "Tutte" || priority === "Esauriti" && row.priority === "urgent" || priority === "Critici" && row.priority === "critical" || priority === "Trasferibili" && row.transferAmount > 0));

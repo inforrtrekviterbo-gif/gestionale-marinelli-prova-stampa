@@ -41,5 +41,16 @@
     "wrangler": "4.92.0"
   },
   "type": "module",
-  "displayName": "Gestionale di Marinelli Stefano"
+  "displayName": "Gestionale di Marinelli Stefano",
+  "allowScripts": {
+    "workerd@1.20260515.1": true,
+    "esbuild@0.18.20": true,
+    "esbuild@0.25.12": true,
+    "esbuild@0.28.0": true,
+    "esbuild@0.27.3": true,
+    "@firebase/util@1.13.0": true,
+    "protobufjs@7.6.5": true,
+    "unrs-resolver@1.11.1": true,
+    "sharp@0.34.5": true
+  }
 }
